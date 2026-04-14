@@ -5,13 +5,12 @@ import glob
 st.set_page_config(page_title="서울 요식업 상권 리포트", layout="wide")
 
 st.title("📋 요식업 상권 상세 수치 리포트")
-st.caption("뚝섬/종로 데이터 매칭 문제를 최종 해결한 버전입니다.")
+st.caption("뚝섬역 및 둔촌역이 제외된 안정화 버전입니다.")
 
-# 1. STATION_MAP 수정 (가장 확실한 키워드로 매칭)
+# 1. STATION_MAP 정렬 (문제가 된 뚝섬, 둔촌역 삭제)
 STATION_MAP = {
     "강남역": "역삼1", 
     "홍대입구역": "서교", 
-    "뚝섬역(성수)": "성수1가", # 성수1가제1동, 성수1가제2동 등을 모두 포함
     "종로3가역": "종로1",      
     "을지로3가역": "을지로", 
     "신촌역": "신촌", 
@@ -39,13 +38,13 @@ def load_all_data():
 df_raw = load_all_data()
 
 if df_raw is not None:
-    # 데이터 전처리: 행정동 명칭에서 공백 제거
+    # 데이터 전처리: 행정동 명칭에서 공백 제거하여 매칭률 향상
     df_raw['행정동_코드_명'] = df_raw['행정동_코드_명'].str.replace(" ", "")
     
     selected_station = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
     keyword = STATION_MAP[selected_station]
     
-    # 필터링 로직 강화
+    # 필터링
     filtered_df = df_raw[
         (df_raw['행정동_코드_명'].str.contains(keyword, na=False)) & 
         (df_raw['기준_년분기_코드'] >= 20221) &
@@ -53,16 +52,11 @@ if df_raw is not None:
     ].copy()
 
     if not filtered_df.empty:
-        # 데이터 타입 정리
         for col in ['개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률', '점포_수']:
             filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
         filtered_df['기준_년분기_코드'] = filtered_df['기준_년분기_코드'].astype(str)
 
-        # 실제 매칭된 동 이름들 (성수1가제1동, 제2동 합산 처리)
-        real_names = ", ".join(filtered_df['행정동_코드_명'].unique())
-        latest_q = filtered_df['기준_년분기_코드'].max()
-        
-        # 합산 처리 (동이 여러 개일 수 있으므로 분기별/업종별 sum)
+        # 분기별/업종별 데이터 합산 처리
         summary_grouped = filtered_df.groupby(['기준_년분기_코드', '서비스_업종_코드_명']).agg({
             '점포_수': 'sum',
             '개업_점포_수': 'sum',
@@ -71,7 +65,10 @@ if df_raw is not None:
             '폐업_률': 'mean'
         }).reset_index()
 
-        st.subheader(f"📍 {selected_station} 분석 ({real_names})")
+        real_name = filtered_df['행정동_코드_명'].iloc[0]
+        latest_q = summary_grouped['기준_년분기_코드'].max()
+        
+        st.subheader(f"📍 {selected_station} 분석 (매칭: {real_name})")
         
         latest_summary = summary_grouped[summary_grouped['기준_년분기_코드'] == latest_q]
         m1, m2, m3 = st.columns(3)
@@ -102,9 +99,6 @@ if df_raw is not None:
                 else:
                     st.info(f"'{service}' 데이터가 없습니다.")
     else:
-        st.warning(f"'{keyword}' 키워드로 매칭된 데이터가 없습니다.")
-        # 디버깅용: 실제 데이터에 어떤 동네들이 있는지 보여줌
-        if st.checkbox("데이터 내 실제 행정동 이름 확인"):
-            st.write(df_raw['행정동_코드_명'].unique()[:100])
+        st.warning(f"선택하신 지역의 데이터를 불러올 수 없습니다.")
 else:
-    st.error("CSV 파일을 찾을 수 없습니다.")
+    st.error("CSV 파일을 찾을 수 없습니다. GitHub 업로드 상태를 확인해주세요.")
