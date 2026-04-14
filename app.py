@@ -2,87 +2,33 @@ import streamlit as st
 import requests
 import pandas as pd
 
-# 1. 새로 발급받으신 인증키
+# 새로 발급받은 키
 API_KEY = "48476d747a676e6437365767456965"
+SERVICE = "VwsmadstrStorW"
 
-# 2. 명세서 기반 서비스명 및 지역 매핑
-SERVICE_NAME = "VwsmadstrStorW" 
-STATIONS = {
-    "강남역": "11680640", "홍대입구역": "11440660", "종로3가역": "11110615",
-    "을지로3가역": "11140605", "신촌역": "11410585", "합정역": "11440610",
-    "신림역": "11620695", "서울대입구역": "11620595", "건대입구역": "11215710",
-    "방이역": "11710562", "잠실역": "11710710"
-}
+st.title("🔍 API 연결 긴급 점검")
 
-st.set_page_config(page_title="서울 상권 분석 (공식 명세 반영)", layout="wide")
-st.title("🚇 지하철역 주변 상권 분석 (2020~2025)")
-
-def fetch_data(dong_code):
-    all_rows = []
+# 테스트용: 강남역(11680640) 2024년 4분기 데이터 딱 하나만 호출
+if st.button("강남역 2024년 4분기 데이터 호출 테스트"):
+    # 명세서대로 URL 구성: 인증키/json/서비스명/시작/종료/기준년분기
+    # 연도(2024) + 분기(4) = 20244
+    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/{SERVICE}/1/100/20244"
     
-    # 명세서의 STDR_YYQU_CD 형식(YYYYQ)에 맞춰 루프 생성
-    years = [str(y) for y in range(2020, 2026)]
-    quarters = ["1", "2", "3", "4"]
+    res = requests.get(url)
+    data = res.json()
     
-    progress_bar = st.progress(0)
-    total = len(years) * len(quarters)
-    count = 0
-
-    for y in years:
-        for q in quarters:
-            target_period = y + q # 예: "20241"
-            
-            # 명세서 구조: 인증키/타입/서비스명/시작/종료/기준_년분기_코드
-            # 행정동 코드는 필터링 인자가 없으므로 전체를 가져와서 코드 내에서 필터링해야 합니다.
-            url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/{SERVICE_NAME}/1/1000/{target_period}"
-            
-            try:
-                res = requests.get(url)
-                if res.status_code == 200:
-                    data = res.json()
-                    if SERVICE_NAME in data:
-                        rows = data[SERVICE_NAME]['row']
-                        # 선택한 행정동 코드(ADSTRD_CD)와 일치하는 데이터만 필터링
-                        filtered = [r for r in rows if r.get('ADSTRD_CD') == dong_code]
-                        all_rows.extend(filtered)
-            except:
-                pass
-            
-            count += 1
-            progress_bar.progress(count / total)
-                
-    return pd.DataFrame(all_rows)
-
-selected_station = st.selectbox("분석할 지하철역을 선택하세요", list(STATIONS.keys()))
-
-if st.button("데이터 분석 시작"):
-    with st.spinner('명세서 데이터 로드 중...'):
-        df = fetch_data(STATIONS[selected_station])
+    if SERVICE in data:
+        df_all = pd.DataFrame(data[SERVICE]['row'])
+        # 강남역(역삼1동) 코드만 필터링
+        my_area = df_all[df_all['ADSTRD_CD'] == "11680640"]
         
-        if not df.empty:
-            # 명세서 출력값 매핑: OPBIZ_STOR_CO(개업), CLSBIZ_STOR_CO(폐업)
-            df['OPBIZ_STOR_CO'] = pd.to_numeric(df['OPBIZ_STOR_CO'])
-            df['CLSBIZ_STOR_CO'] = pd.to_numeric(df['CLSBIZ_STOR_CO'])
-            
-            # 분기별 합산 (여러 업종 데이터를 하나로 합침)
-            summary = df.groupby('STDR_YYQU_CD').agg({
-                'OPBIZ_STOR_CO': 'sum',
-                'CLSBIZ_STOR_CO': 'sum'
-            }).reset_index()
-            
-            # 시각화용 이름 변경
-            summary.columns = ['년분기', '개업수', '폐업수']
-            summary = summary.sort_values('년분기')
-
-            st.success(f"✅ {selected_station} 분석 완료!")
-            
-            # 메트릭
-            c1, c2 = st.columns(2)
-            c1.metric("총 개업 수", f"{int(summary['개업수'].sum()):,}개")
-            c2.metric("총 폐업 수", f"{int(summary['폐업수'].sum()):,}개")
-            
-            # 그래프 및 표
-            st.line_chart(summary.set_index('년분기'))
-            st.dataframe(summary, use_container_width=True)
+        if not my_area.empty:
+            st.success("✅ 데이터 호출 성공!")
+            st.write("강남역 개업수:", my_area['OPBIZ_STOR_CO'].values[0])
+            st.dataframe(my_area)
         else:
-            st.error("데이터가 없습니다. (TIP: 새로 받은 키가 시스템에 등록되는 데 시간이 걸릴 수 있습니다.)")
+            st.warning("⚠️ 서비스는 응답하나, 강남역(11680640) 코드가 결과에 없습니다.")
+            st.write("응답에 포함된 첫 5건 행정동 코드:", df_all['ADSTRD_CD'].head().tolist())
+    else:
+        st.error(f"❌ 데이터 로드 실패: {data.get('RESULT', {}).get('MESSAGE', '알 수 없는 오류')}")
+        st.write("전체 서버 응답:", data)
