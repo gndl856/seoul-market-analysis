@@ -5,15 +5,14 @@ import glob
 st.set_page_config(page_title="서울 요식업 상권 리포트", layout="wide")
 
 st.title("📋 요식업 상권 상세 수치 리포트")
-st.caption("뚝섬(성수), 종로3가 매칭 수정 및 둔촌역 삭제 버전입니다.")
+st.caption("뚝섬, 종로3가 자동 매칭 및 둔촌역 삭제 완료 버전입니다.")
 
-# 1. STATION_MAP 정밀 수정 (데이터상의 정확한 명칭으로 변경)
-# 둔촌역은 리스트에서 완전히 제거했습니다.
+# 1. STATION_MAP 수정 (핵심 키워드 위주로 설정)
 STATION_MAP = {
     "강남역": "역삼1동", 
     "홍대입구역": "서교동", 
-    "뚝섬역(성수)": "성수동1가제1동", # '제'가 포함된 명칭으로 수정
-    "종로3가역": "종로1·2·3·4가동", # 특수기호(·) 확인 필요하여 표준 명칭 적용
+    "뚝섬역(성수)": "성수동1가", # '제1동'이든 '1동'이든 포함하면 찾음
+    "종로3가역": "종로1",      # '종로1.2.3.4가동' 전체를 포함하게 됨
     "을지로3가역": "을지로동", 
     "신촌역": "신촌동", 
     "합정역": "서교동",
@@ -32,7 +31,6 @@ def load_all_data():
     df_list = []
     for f in all_files:
         try:
-            # 윈도우 엑셀 형식(cp949) 우선 시도
             df_list.append(pd.read_csv(f, encoding='cp949'))
         except:
             df_list.append(pd.read_csv(f, encoding='utf-8-sig'))
@@ -41,28 +39,29 @@ def load_all_data():
 df_raw = load_all_data()
 
 if df_raw is not None:
-    # 2. 동네 이름 보정 (데이터 내의 공백이나 특수문자 차이 해결)
-    df_raw['행정동_코드_명'] = df_raw['행정동_코드_명'].str.strip()
-    
     selected_station = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
-    target_dong = STATION_MAP[selected_station]
+    keyword = STATION_MAP[selected_station]
     
-    # 필터링
+    # [핵심 수정] 정확히 일치(==)가 아니라 포함(.str.contains)으로 필터링
+    # 이렇게 하면 '종로1·2·3·4가동'의 특수기호 문제를 완벽하게 피할 수 있습니다.
     filtered_df = df_raw[
-        (df_raw['행정동_코드_명'] == target_dong) & 
+        (df_raw['행정동_코드_명'].str.contains(keyword, na=False)) & 
         (df_raw['기준_년분기_코드'] >= 20221) &
         (df_raw['서비스_업종_코드_명'].isin(FOOD_SERVICES))
     ].copy()
 
     if not filtered_df.empty:
+        # 데이터 타입 정리
         for col in ['개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률', '점포_수']:
             filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
         filtered_df['기준_년분기_코드'] = filtered_df['기준_년분기_코드'].astype(str)
 
+        # 실제 매칭된 동 이름 가져오기
+        real_dong_name = filtered_df['행정동_코드_명'].iloc[0]
         latest_q = filtered_df['기준_년분기_코드'].max()
         summary_df = filtered_df[filtered_df['기준_년분기_코드'] == latest_q]
         
-        st.subheader(f"📍 {selected_station}({target_dong}) {latest_q}분기 요약")
+        st.subheader(f"📍 {selected_station}({real_dong_name}) {latest_q}분기 요약")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("현재 전체 점포", f"{int(summary_df['점포_수'].sum()):,}개")
         m2.metric("평균 개업률", f"{summary_df['개업_율'].mean():.1f}%")
@@ -94,9 +93,6 @@ if df_raw is not None:
                 else:
                     st.info(f"'{service}' 데이터가 이 지역에는 없습니다.")
     else:
-        # 데이터가 없을 경우 리스트 확인용 메시지 출력
-        st.warning(f"'{target_dong}' 명칭으로 검색된 데이터가 없습니다.")
-        if st.checkbox("데이터 내부 행정동 명칭 확인해보기"):
-            st.write(df_raw['행정동_코드_명'].unique()[:50]) # 상위 50개만 출력
+        st.warning(f"'{keyword}' 키워드로 검색된 데이터가 없습니다. 파일 내용을 확인해주세요.")
 else:
     st.error("CSV 파일을 찾을 수 없습니다.")
