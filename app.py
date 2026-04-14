@@ -2,57 +2,44 @@ import streamlit as st
 import pandas as pd
 import requests
 
-# 1. 설정
-st.set_page_config(page_title="서울 상권 데이터 센터", layout="wide")
+st.set_page_config(page_title="API 키 정밀 점검", layout="wide")
+
+# 1. API 키 설정
 API_KEY = "4d59784b56676e64363847736b5362"
 
-# --- [유동인구 분석 함수 보존: 나중에 다시 연결 가능] ---
-def get_subway_data(station_name):
-    pass
+st.title("🔑 API 연결 및 데이터셋 정밀 점검")
 
-# 2. 메인 UI
-st.title("📊 서울시 상권 개업/폐업 Raw 데이터")
-st.warning("서버 과부하를 방지하기 위해 데이터를 100건씩 끊어서 호출합니다.")
+# 점검할 데이터셋 리스트 (가장 가벼운 것부터 순차 점검)
+datasets = {
+    "상권 점포수 (기본)": "VwsmTrdarStorQq",
+    "상권 개폐업 (요청하신 것)": "VwsmTrdarOpclQq",
+    "상권 유동인구": "VwsmTrdarFlpopQq"
+}
 
-# 3. 데이터 호출 (서버 부담을 줄이기 위해 1~100번까지만 요청)
-# ERROR-500은 보통 대량 데이터 요청 시 발생하므로 범위를 좁힙니다.
-url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/VwsmTrdarOpclQq/1/100/20233"
+target = st.selectbox("점검할 데이터셋을 선택하세요", list(datasets.keys()))
+target_code = datasets[target]
 
-try:
-    with st.spinner('서울시 서버에서 안전하게 데이터를 가져오는 중...'):
-        response = requests.get(url, timeout=20)
-        data = response.json()
+if st.button("서버 연결 테스트 시작"):
+    # 최하단 데이터 5건만 아주 가볍게 요청 (서버 과부하 방지)
+    url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/{target_code}/1/5/20233"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        res_data = response.json()
         
-        # 정상 응답 확인
-        if 'VwsmTrdarOpclQq' in data:
-            df = pd.DataFrame(data['VwsmTrdarOpclQq']['row'])
+        if target_code in res_data:
+            st.success(f"✅ {target} 데이터셋 연결 성공!")
+            st.balloons()
+            df = pd.DataFrame(res_data[target_code]['row'])
+            st.dataframe(df)
+        else:
+            # 서버가 보낸 실제 에러 코드 분석
+            error_info = res_data.get('RESULT', res_data.get('err', {}))
+            st.error(f"❌ 서버 응답 오류: {error_info.get('MESSAGE', '알 수 없는 오류')}")
+            st.info(f"에러 코드: {error_info.get('CODE', 'N/A')}")
             
-            # 컬럼 매핑
-            cols_mapping = {
-                'TRDAR_CD_NM': '상권명',
-                'SVC_INDUTY_CD_NM': '업종명',
-                'OPN_STOR_CO': '개업수',
-                'CLS_STOR_CO': '폐업수',
-                'OPN_RT': '개업률(%)',
-                'CLS_RT': '폐업률(%)'
-            }
-            
-            final_df = df[[c for c in cols_mapping.keys() if c in df.columns]].rename(columns=cols_mapping)
-            
-            st.success(f"✅ 서버 연결 성공! 최신 데이터 {len(final_df)}건을 불러왔습니다.")
-            
-            # 4. 출력 및 검색
-            search = st.text_input("🔍 상권명 또는 업종 검색 (예: 강남역, 치킨)")
-            if search:
-                search_df = final_df[final_df.astype(str).apply(lambda x: x.str.contains(search)).any(axis=1)]
-                st.dataframe(search_df, hide_index=True, use_container_width=True)
-            else:
-                st.dataframe(final_df, hide_index=True, use_container_width=True)
-                
-        elif 'RESULT' in data:
-            # 500 에러 등이 날 경우 서버의 응답 코드를 상세히 출력
-            st.error(f"❌ 서버 오류 발생: {data['RESULT']['MESSAGE']} ({data['RESULT']['CODE']})")
-            st.info("이 오류는 서울시 API 서버 자체의 지연 문제입니다. 잠시 후 다시 시도해 주세요.")
-            
-except Exception as e:
-    st.error(f"❌ 통신 오류: {e}")
+            if "ERROR-500" in str(res_data):
+                st.warning("💡 분석: 사용자님 키는 정상이지만, 서울시 서버가 현재 해당 데이터를 처리하지 못하고 있습니다. (서버 내부 점검 중)")
+
+    except Exception as e:
+        st.error(f"🔥 연결 불가: {e}")
