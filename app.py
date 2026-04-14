@@ -5,9 +5,9 @@ import glob
 st.set_page_config(page_title="서울 요식업 상권 리포트", layout="wide")
 
 st.title("📋 요식업 상권 상세 수치 리포트")
-st.caption("뚝섬역 및 둔촌역이 제외된 안정화 버전입니다.")
+st.caption("요청하신 대로 뚝섬역과 둔촌역을 완전히 제거한 버전입니다.")
 
-# 1. STATION_MAP 정렬 (문제가 된 뚝섬, 둔촌역 삭제)
+# 1. STATION_MAP (뚝섬, 둔촌역을 리스트에서 완전히 삭제했습니다)
 STATION_MAP = {
     "강남역": "역삼1", 
     "홍대입구역": "서교", 
@@ -38,9 +38,10 @@ def load_all_data():
 df_raw = load_all_data()
 
 if df_raw is not None:
-    # 데이터 전처리: 행정동 명칭에서 공백 제거하여 매칭률 향상
+    # 데이터 전처리: 행정동 명칭에서 공백 제거
     df_raw['행정동_코드_명'] = df_raw['행정동_코드_명'].str.replace(" ", "")
     
+    # 사이드바 선택 메뉴 (여기서 뚝섬역이 이제 안 보일 거예요!)
     selected_station = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
     keyword = STATION_MAP[selected_station]
     
@@ -56,7 +57,6 @@ if df_raw is not None:
             filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
         filtered_df['기준_년분기_코드'] = filtered_df['기준_년분기_코드'].astype(str)
 
-        # 분기별/업종별 데이터 합산 처리
         summary_grouped = filtered_df.groupby(['기준_년분기_코드', '서비스_업종_코드_명']).agg({
             '점포_수': 'sum',
             '개업_점포_수': 'sum',
@@ -68,7 +68,7 @@ if df_raw is not None:
         real_name = filtered_df['행정동_코드_명'].iloc[0]
         latest_q = summary_grouped['기준_년분기_코드'].max()
         
-        st.subheader(f"📍 {selected_station} 분석 (매칭: {real_name})")
+        st.subheader(f"📍 {selected_station} 분석 (매칭된 동네: {real_name})")
         
         latest_summary = summary_grouped[summary_grouped['기준_년분기_코드'] == latest_q]
         m1, m2, m3 = st.columns(3)
@@ -98,7 +98,5 @@ if df_raw is not None:
                     st.table(display_df)
                 else:
                     st.info(f"'{service}' 데이터가 없습니다.")
-    else:
-        st.warning(f"선택하신 지역의 데이터를 불러올 수 없습니다.")
 else:
-    st.error("CSV 파일을 찾을 수 없습니다. GitHub 업로드 상태를 확인해주세요.")
+    st.error("CSV 파일을 찾을 수 없습니다.")
