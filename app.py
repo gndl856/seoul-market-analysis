@@ -3,67 +3,62 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 
-# 1. 기본 설정
-st.set_page_config(page_title="서울 상권 Raw 데이터 분석", layout="wide")
+# 1. 설정
+st.set_page_config(page_title="서울 상권 데이터 센터", layout="wide")
 API_KEY = "4d59784b56676e64363847736b5362"
 
-# --- [보존된 유동인구 분석 함수: 나중에 필요할 때 바로 활성화 가능] ---
+# --- [유동인구 분석 로직 보존: 나중에 요청 시 탭만 추가하면 바로 작동] ---
 def get_subway_data(station_name):
-    # 나중에 유동인구 기능을 다시 넣을 때 사용할 로직입니다.
+    # 나중에 다시 활성화할 때 사용할 함수입니다.
     pass
 
-# 2. UI 구성
-st.title("🍕 서울시 상권 점포 개/폐업 Raw 데이터")
-st.info("특정 지역 필터링 없이 현재 API가 제공하는 최신 데이터 1,000건을 그대로 불러옵니다.")
+# 2. 메인 UI
+st.title("📊 서울시 상권 점포 개/폐업 Raw 데이터")
+st.info("호출 제한 없는 일반 인증키 모드입니다. (1회 1,000건 추출)")
 
-# 3. 데이터 호출 (가장 최신인 2024년 4분기 데이터 전체 요청)
-# 1회 호출 최대치인 1000건을 요청합니다.
+# 3. 데이터 호출 및 예외 처리 강화
+# 최신 데이터 시점 설정
 url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/VwsmTrdarStorQq/1/1000/20244"
 
-with st.spinner('서울시 전체 상권 데이터를 불러오는 중...'):
-    try:
+try:
+    with st.spinner('데이터를 실시간으로 불러오는 중...'):
         response = requests.get(url, timeout=15)
-        res = response.json()
+        data = response.json()
         
-        if 'VwsmTrdarStorQq' in res:
-            # 1,000건의 전체 로우 데이터 생성
-            raw_df = pd.DataFrame(res['VwsmTrdarStorQq']['row'])
+        if 'VwsmTrdarStorQq' in data:
+            # 원본 데이터 그대로 가져오기
+            raw_rows = data['VwsmTrdarStorQq']['row']
+            df = pd.DataFrame(raw_rows)
             
-            # 보기 편하게 컬럼명만 한글로 변경
-            cols_map = {
+            # 에러 방지: 존재하는 컬럼만 한글로 변환
+            cols_mapping = {
                 'TRDAR_CD_NM': '상권명',
                 'SVC_INDUTY_CD_NM': '업종명',
                 'STOR_CO': '점포수',
                 'OPN_STOR_CO': '개업수',
-                'CLS_STOR_CO': '폐업수',
-                'TRDAR_CD': '상권코드'
+                'CLS_STOR_CO': '폐업수'
             }
-            display_df = raw_df[list(cols_map.keys())].rename(columns=cols_map)
             
-            # 데이터 요약 정보
-            st.success(f"✅ 총 {len(display_df):,}건의 상권 데이터를 성공적으로 불러왔습니다.")
+            # 실제 데이터에 있는 컬럼만 골라내기 (이미지상의 에러 원인 차단)
+            existing_cols = [c for c in cols_mapping.keys() if c in df.columns]
+            final_df = df[existing_cols].rename(columns=cols_mapping)
             
-            # 메트릭 표시 (불러온 1,000건 전체 합계)
-            m1, m2, m3 = st.columns(3)
-            m1.metric("총 점포 합계", f"{display_df['점포수'].astype(int).sum():,}개")
-            m2.metric("총 개업 합계", f"{display_df['개업수'].astype(int).sum():,}개")
-            m3.metric("총 폐업 합계", f"{display_df['폐업수'].astype(int).sum():,}개")
+            # 상단 요약 지표
+            st.success(f"✅ 총 {len(final_df):,}개의 상권 데이터를 성공적으로 수집했습니다.")
             
-            st.markdown("---")
+            # 4. 검색 및 결과 출력
+            search = st.text_input("🔍 특정 상권이나 업종을 검색해 보세요 (예: 강남역, 치킨집)")
             
-            # 데이터 검색 기능 추가 (사용자가 직접 타이핑해서 찾기)
-            search_query = st.text_input("🔍 찾고 싶은 상권명이나 업종명을 입력하세요 (예: 강남역, 커피전문점)")
-            if search_query:
-                filtered_df = display_df[
-                    display_df['상권명'].str.contains(search_query) | 
-                    display_df['업종명'].str.contains(search_query)
-                ]
-                st.dataframe(filtered_df, hide_index=True, use_container_width=True)
+            if search:
+                # 검색어가 포함된 행만 필터링
+                search_df = final_df[final_df.astype(str).apply(lambda x: x.str.contains(search)).any(axis=1)]
+                st.dataframe(search_df, hide_index=True, use_container_width=True)
             else:
-                st.dataframe(display_df, hide_index=True, use_container_width=True)
+                st.dataframe(final_df, hide_index=True, use_container_width=True)
                 
         else:
-            st.error("❌ API 응답에 데이터가 없습니다. 인증키를 확인해 주세요.")
+            st.error("API 응답 구조가 평소와 다릅니다. (데이터 없음 혹은 점검 중)")
             
-    except Exception as e:
-        st.error(f"❌ 서버 연결 실패: {e}. 인증키가 유효한지 또는 호출 제한에 걸렸는지 확인이 필요합니다.")
+except Exception as e:
+    st.error(f"❌ 데이터 수집 중 오류 발생: {e}")
+    st.info("API 키의 권한 설정이나 서버의 일시적 지연일 수 있습니다.")
