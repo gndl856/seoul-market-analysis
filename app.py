@@ -1,78 +1,50 @@
 import streamlit as st
-import pandas as pd
 import requests
+import pandas as pd
 
-st.set_page_config(page_title="서울 요식업 분석", layout="wide")
+# 1. 설정 및 데이터 매핑
 API_KEY = "4d59784b56676e64363847736b5362"
 
-def get_store_trend(search_keyword, quarters):
-    all_data = []
-    matched_names = []
-    
-    # 1. 먼저 상권명 찾기
-    test_url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/VwsmTrdarStorQq/1/1000/20233"
-    try:
-        sample_res = requests.get(test_url).json()
-        if 'VwsmTrdarStorQq' in sample_res:
-            sample_df = pd.DataFrame(sample_res['VwsmTrdarStorQq']['row'])
-            matched_names = sample_df[sample_df['TRDAR_CD_NM'].str.contains(search_keyword)]['TRDAR_CD_NM'].unique()
-            
-            if len(matched_names) == 0:
-                return pd.DataFrame(), []
-            
-            # 2. 실제 데이터 수집
-            for q in quarters:
-                url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/VwsmTrdarStorQq/1/1000/{q}"
-                res = requests.get(url).json()
-                if 'VwsmTrdarStorQq' in res:
-                    df = pd.DataFrame(res['VwsmTrdarStorQq']['row'])
-                    target_df = df[
-                        (df['TRDAR_CD_NM'].isin(matched_names)) & 
-                        (df['SVC_INDUTY_CD_NM'].str.contains('한식|중식|일식|양식|제과|커피|분식'))
-                    ].copy()
-                    if not target_df.empty:
-                        target_df['기준분기'] = q
-                        all_data.append(target_df)
-    except:
-        pass
-    return pd.concat(all_data) if all_data else pd.DataFrame(), matched_names
+STATIONS = {
+    "홍대입구역": "11440660", "합정역": "11440610", "신촌역": "11410585",
+    "신림역": "11620695", "서울대입구역": "11620595", "을지로3가역": "11140605",
+    "종로3가역": "11110615", "강남역": "11680640", "건대입구역": "11215710",
+    "방이역": "11710562", "잠실역": "11710710"
+}
 
-st.title("🍔 요식업 점포수 추이 및 증감 분석")
+st.set_page_config(page_title="서울 상권 분석 툴", layout="wide")
+st.title("🚇 지하철역 주변 상권 개폐업 분석 (2020~2025)")
 
-search_input = st.text_input("분석할 상권명 키워드 (예: 강남, 종로)", value="강남")
-quarters = ["20231", "20232", "20233", "20234"]
+# 2. 데이터 호출 함수
+def fetch_data(dong_code):
+    all_rows = []
+    # 2020년부터 2025년까지 반복 (상권 데이터는 호출 제한 없음)
+    for year in range(2020, 2026):
+        for quarter in range(1, 5):
+            url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S/1/1000/{year}/{quarter}/{dong_code}"
+            res = requests.get(url)
+            if res.status_code == 200:
+                data = res.json()
+                if 'V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S' in data:
+                    all_rows.extend(data['V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S']['row'])
+    return pd.DataFrame(all_rows)
 
-if st.button("분석 시작"):
-    with st.spinner("데이터 분석 중..."):
-        trend_df, matched_list = get_store_trend(search_input, quarters)
+# 3. 사용자 인터페이스
+selected_station = st.selectbox("분석할 지하철역을 선택하세요", list(STATIONS.keys()))
+
+if st.button("데이터 분석 시작"):
+    with st.spinner('데이터를 불러오는 중입니다...'):
+        df = fetch_data(STATIONS[selected_station])
         
-    if not trend_df.empty:
-        st.success(f"✅ 검색 결과: {', '.join(matched_list)}")
-        
-        # 데이터 정리
-        display_df = trend_df[['기준분기', 'SVC_INDUTY_CD_NM', 'STOR_CO']].copy()
-        display_df.columns = ['분기', '업종명', '점포수']
-        display_df['점포수'] = pd.to_numeric(display_df['점포수'])
-        
-        # 피벗 테이블 생성
-        pivot_df = display_df.pivot_table(index='업종명', columns='분기', values='점포수', aggfunc='sum').fillna(0)
-        
-        # [핵심 수정] 실제 존재하는 컬럼(분기)들만 추출하여 비교
-        available_quarters = sorted(pivot_df.columns.tolist())
-        
-        if len(available_quarters) >= 2:
-            first_q = available_quarters[0]
-            last_q = available_quarters[-1]
-            # 안전하게 컬럼 생성
-            pivot_df['전체증감'] = pivot_df[last_q] - pivot_df[first_q]
+        if not df.empty:
+            # 출력 데이터 정리 (연도, 분기, 개업수, 폐업수)
+            df = df[['STDR_YY_CD', 'STDR_QU_CD', 'OPN_STOR_CO', 'CLS_STOR_CO']]
+            df.columns = ['연도', '분기', '개업점포수', '폐업점포수']
             
-            st.subheader(f"📊 {search_input} 인근 요식업 변동 ({first_q} ~ {last_q})")
-            st.dataframe(pivot_df, use_container_width=True)
+            st.success(f"{selected_station} 분석 완료!")
+            st.dataframe(df, use_container_width=True)
             
-            total_diff = pivot_df['전체증감'].sum()
-            st.metric(f"기간 내 점포 순증감", f"{int(total_diff)}개")
+            # 간단한 차트 시각화
+            st.line_chart(df.set_index(['연도', '분기'])[['개업점포수', '폐업점포수']])
         else:
-            st.warning("비교할 수 있는 분기 데이터가 충분하지 않습니다. (최소 2개 분기 필요)")
-            st.dataframe(pivot_df)
-    else:
-        st.error("데이터를 찾을 수 없습니다.")
+            st.warning("해당 기간의 데이터를 찾을 수 없습니다.")
