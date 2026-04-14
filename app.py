@@ -1,26 +1,20 @@
 import streamlit as st
 import pandas as pd
 import glob
+import plotly.express as px  # 업종별 비교를 위해 추가
 
 st.set_page_config(page_title="서울 지하철 요식업 상권 분석", layout="wide")
-st.title("🍴 지하철역 주변 요식업 상권 분석 (2022~2024)")
+st.title("🍴 지하철역 주변 요식업 업종별 상세 분석")
 
-# 지하철역 - 행정동 매칭
+# 1. 지하철역 - 행정동 매칭
 STATION_MAP = {
-    "강남역": "역삼1동",
-    "홍대입구역": "서교동",
-    "종로3가역": "종로1.2.3.4가동",
-    "을지로3가역": "을지로동",
-    "신촌역": "신촌동",
-    "합정역": "서교동",
-    "신림역": "신림동",
-    "서울대입구역": "청룡동",
-    "건대입구역": "화양동",
-    "잠실역": "잠실6동",
-    "둔촌역": "둔촌2동"
+    "강남역": "역삼1동", "홍대입구역": "서교동", "종로3가역": "종로1.2.3.4가동",
+    "을지로3가역": "을지로동", "신촌역": "신촌동", "합정역": "서교동",
+    "신림역": "신림동", "서울대입구역": "청룡동", "건대입구역": "화양동",
+    "잠실역": "잠실6동", "둔촌역": "둔촌2동"
 }
 
-# 요식업에 해당하는 서비스 업종 리스트 (CSV 내 '서비스_업종_코드_명' 기준)
+# 요식업종 리스트
 FOOD_SERVICES = [
     "한식음식점", "중식음식점", "일식음식점", "양식음식점", 
     "제과점", "패스트푸드점", "치킨전문점", "분식전문점", 
@@ -30,8 +24,7 @@ FOOD_SERVICES = [
 @st.cache_data
 def load_all_data():
     all_files = glob.glob('서울시*.csv')
-    if not all_files:
-        return None
+    if not all_files: return None
     df_list = []
     for filename in all_files:
         try:
@@ -44,57 +37,64 @@ def load_all_data():
 df_raw = load_all_data()
 
 if df_raw is not None:
-    selected_station = st.selectbox("분석할 지하철역을 선택하세요", list(STATION_MAP.keys()))
+    # 사이드바에서 지역 선택
+    selected_station = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
     target_dong = STATION_MAP[selected_station]
+    
+    # 분석 기간 필터링
+    filtered_df = df_raw[
+        (df_raw['행정동_코드_명'] == target_dong) & 
+        (df_raw['기준_년분기_코드'] >= 20221) &
+        (df_raw['서비스_업종_코드_명'].isin(FOOD_SERVICES))
+    ].copy()
 
-    if st.button(f"{selected_station} 요식업 분석 시작"):
-        # 필터링: 행정동 + 2022년 이후 + 요식업종 한정
-        filtered_df = df_raw[
-            (df_raw['행정동_코드_명'] == target_dong) & 
-            (df_raw['기준_년분기_코드'] >= 20221) &
-            (df_raw['서비스_업종_코드_명'].isin(FOOD_SERVICES))
-        ].copy()
+    if not filtered_df.empty:
+        # 데이터 타입 변환
+        for col in ['개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률', '점포_수']:
+            filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
+
+        # --- 메인 대시보드 ---
+        st.subheader(f"✅ {selected_station}({target_dong}) 요식업 현황")
         
-        if not filtered_df.empty:
-            # 숫자형 변환
-            cols = ['개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']
-            for col in cols:
-                filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
+        # 1. 업종별 점포 비중 (파이 차트)
+        latest_quarter = filtered_df['기준_년분기_코드'].max()
+        latest_df = filtered_df[filtered_df['기준_년분기_코드'] == latest_quarter]
+        
+        fig_pie = px.pie(latest_df, values='점포_수', names='서비스_업종_코드_명', 
+                         title=f"현재({latest_quarter}) 가장 많은 요식업종 비중",
+                         hole=.3, color_discrete_sequence=px.colors.sequential.RdBu)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-            # 분기별 합계 및 평균 계산
-            summary = filtered_df.groupby('기준_년분기_코드').agg({
-                '개업_점포_수': 'sum',
-                '폐업_점포_수': 'sum',
-                '개업_율': 'mean',
-                '폐업_률': 'mean'
-            }).reset_index()
-            
-            summary = summary.sort_values('기준_년분기_코드')
-            summary['기준_년분기_코드'] = summary['기준_년분기_코드'].astype(str)
+        # 2. 업종별 개업/폐업 수 비교 (막대 그래프)
+        st.subheader("📊 어떤 업종이 가장 많이 생기고 문을 닫았을까?")
+        category_sum = filtered_df.groupby('서비스_업종_코드_명').agg({
+            '개업_점포_수': 'sum',
+            '폐업_점포_수': 'sum'
+        }).reset_index()
 
-            st.success(f"✅ {selected_station} ({target_dong}) 요식업 데이터 분석 완료")
+        fig_bar = px.bar(category_sum, x='서비스_업종_코드_명', y=['개업_점포_수', '폐업_점포_수'],
+                         barmode='group', title="업종별 누적 개폐업 수 비교",
+                         color_discrete_map={'개업_점포_수': '#1f77b4', '폐업_점포_수': '#FF0000'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        # 3. 업종별 개폐업률 추이 (멀티 선택 필터)
+        st.subheader("📈 업종별 상세 추이 확인")
+        selected_sub_services = st.multiselect("확인하고 싶은 업종을 선택하세요", 
+                                              FOOD_SERVICES, default=["한식음식점", "커피-음료"])
+        
+        if selected_sub_services:
+            trend_df = filtered_df[filtered_df['서비스_업종_코드_명'].isin(selected_sub_services)]
+            trend_df['기준_년분기_코드'] = trend_df['기준_년분기_코드'].astype(str)
             
-            # 1. 상단 지표
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("요식업 총 개업", f"{int(summary['개업_점포_수'].sum()):,}개")
-            m2.metric("요식업 총 폐업", f"{int(summary['폐업_점포_수'].sum()):,}개")
-            m3.metric("평균 개업률", f"{summary['개업_율'].mean():.1f}%")
-            m4.metric("평균 폐업률", f"{summary['폐업_률'].mean():.1f}%")
+            fig_line = px.line(trend_df, x='기준_년분기_코드', y='폐업_률', color='서비스_업종_코드_명',
+                               title="선택 업종별 폐업률 추이 (%)", markers=True)
+            st.plotly_chart(fig_line, use_container_width=True)
             
-            # 2. 개폐업 수 차트
-            st.subheader("📊 요식업 개업 vs 폐업 수 추이")
-            chart_count = summary.set_index('기준_년분기_코드')[['개업_점포_수', '폐업_점포_수']]
-            st.line_chart(chart_count, color=["#1f77b4", "#FF0000"])
-            
-            # 3. 개폐업률 차트
-            st.subheader("📈 요식업 개업률 vs 폐업률 (%)")
-            chart_rate = summary.set_index('기준_년분기_코드')[['개업_율', '폐업_률']]
-            st.area_chart(chart_rate, color=["#1f77b4", "#FF0000"])
-            
-            # 4. 세부 업종별 비중 (보너스 차트)
-            st.subheader("🍕 분기별 요식업 세부 업종 데이터")
-            st.dataframe(filtered_df[['기준_년분기_코드', '서비스_업종_코드_명', '개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']], use_container_width=True)
-        else:
-            st.warning("선택하신 지역의 요식업 데이터를 찾을 수 없습니다.")
+        # 4. 상세 데이터 테이블
+        with st.expander("🔍 전체 요식업 상세 데이터 보기"):
+            st.dataframe(filtered_df.sort_values(['기준_년분기_코드', '개업_점포_수'], ascending=[False, False]), 
+                         use_container_width=True)
+    else:
+        st.warning("데이터가 없습니다.")
 else:
     st.error("CSV 파일을 업로드해주세요.")
