@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 # 1. 설정 및 인증키
 st.set_page_config(page_title="서울 상권 분석 시스템", layout="wide")
-API_KEY = "4d59784b56676e64363847736b5362" #
+API_KEY = "4d59784b56676e64363847736b5362" 
 
-# 2. 분석 지역 설정 (이미지 image_416bfa.png 기준)
+# 2. 분석 지역 설정
 STATION_CONFIG = {
     "홍대": {"subway": "홍대입구", "code": "3110040"},
     "합정": {"subway": "합정", "code": "3110041"},
@@ -24,7 +24,7 @@ STATION_CONFIG = {
 }
 STATIONS = list(STATION_CONFIG.keys())
 
-# --- [1. 유동인구 데이터 수집] ---
+# --- [데이터 수집 로직] ---
 def get_subway_data(station_name):
     file_path = f"subway_{station_name}.csv"
     if os.path.exists(file_path):
@@ -55,40 +55,25 @@ def get_subway_data(station_name):
         return final_df
     return pd.DataFrame()
 
-# --- [2. 개/폐업 데이터 수집 - 에러 수정 버전] ---
 def get_store_data(station_name):
     file_path = f"store_{station_name}.csv"
-    if os.path.exists(file_path): 
-        return pd.read_csv(file_path).reset_index(drop=True)
-
+    if os.path.exists(file_path): return pd.read_csv(file_path).reset_index(drop=True)
     area_code = STATION_CONFIG[station_name]["code"]
-    # 점포 데이터 API 서비스명 정확히 지정
     url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/VwsmTrdarStorQq/1/1000/20244"
-    
     try:
         res = requests.get(url, timeout=5).json()
         if 'VwsmTrdarStorQq' in res:
             df = pd.DataFrame(res['VwsmTrdarStorQq']['row'])
-            # 해당 상권 코드 데이터만 필터링
             area_df = df[df['TRDAR_CD'] == area_code].copy()
-            
-            # 에러 방지를 위해 실제 컬럼명이 있는지 확인 후 매핑
-            cols = {
-                'SVC_INDUTY_CD_NM': '업종명', 
-                'STOR_CO': '점포수', 
-                'OPN_STOR_CO': '개업', 
-                'CLS_STOR_CO': '폐업'
-            }
-            
+            cols = {'SVC_INDUTY_CD_NM': '업종명', 'STOR_CO': '점포수', 'OPN_STOR_CO': '개업', 'CLS_STOR_CO': '폐업'}
             if not area_df.empty:
                 result = area_df[list(cols.keys())].rename(columns=cols)
                 result.to_csv(file_path, index=False)
                 return result
-    except Exception as e:
-        st.error(f"데이터 연결 오류: {e}")
+    except: pass
     return pd.DataFrame()
 
-# --- [UI 구성 및 가운데 정렬] ---
+# --- [UI 구성] ---
 st.markdown("""
     <style>
         div[data-testid="stDataFrame"] td { text-align: center !important; }
@@ -100,26 +85,33 @@ with st.sidebar:
     st.header("📍 지역 선택")
     sel_station = st.selectbox("분석 지역", STATIONS)
     st.markdown("---")
-    st.success("배포가 완료되었습니다.")
+    st.success("배포 및 정렬 최적화 완료")
 
 st.title(f"🏙️ {sel_station} 상권 분석")
-tab1, tab2 = st.tabs(["📈 유동인구", "🍕 업종별 개/폐업"])
+tab1, tab2 = st.tabs(["📈 유동인구 (그래프 포함)", "🍕 업종별 개/폐업"])
 
 with tab1:
     res1 = get_subway_data(sel_station)
     if not res1.empty:
+        # 상단 표 출력
         st.dataframe(res1, hide_index=True, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader(f"📊 최근 5주 유동인구 추이")
+        
+        # 그래프용 데이터 가공 (5주전 -> 1주전 순서 정렬)
+        chart_data = res1.head(5).copy()
+        chart_data['주차_num'] = chart_data['주차'].str.extract('(\d+)').astype(int)
+        chart_data = chart_data.sort_values('주차_num', ascending=False) # 5, 4, 3, 2, 1순
+        
+        # 선 그래프 출력
+        st.line_chart(data=chart_data, x='주차', y='총 유동인구', color="#FF4B4B")
     else:
-        st.info("데이터를 불러오는 중...")
+        st.info("데이터 로딩 중...")
 
 with tab2:
     res2 = get_store_data(sel_station)
     if not res2.empty:
-        # 개업/폐업 표도 가운데 정렬 적용
         st.dataframe(res2, hide_index=True, use_container_width=True)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("총 점포", f"{res2['점포수'].sum()}개")
-        c2.metric("총 개업", f"{res2['개업'].sum()}개", delta_color="normal")
-        c3.metric("총 폐업", f"{res2['폐업'].sum()}개", delta_color="inverse")
     else:
-        st.warning("이 지역의 점포 데이터를 찾을 수 없습니다.")
+        st.warning("점포 데이터를 불러올 수 없습니다.")
