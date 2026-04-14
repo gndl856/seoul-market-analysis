@@ -2,9 +2,11 @@ import streamlit as st
 import requests
 import pandas as pd
 
-API_KEY = "4d59784b56676e64363847736b5362"
+# 1. 새로 발급받으신 인증키
+API_KEY = "48476d747a676e6437365767456965"
 
-# 1. 엑셀 데이터와 일치하는 행정동 코드 매핑
+# 2. 명세서 기반 서비스명 및 지역 매핑
+SERVICE_NAME = "VwsmadstrStorW" 
 STATIONS = {
     "강남역": "11680640", "홍대입구역": "11440660", "종로3가역": "11110615",
     "을지로3가역": "11140605", "신촌역": "11410585", "합정역": "11440610",
@@ -12,61 +14,75 @@ STATIONS = {
     "방이역": "11710562", "잠실역": "11710710"
 }
 
-st.set_page_config(page_title="서울 상권 분석 툴", layout="wide")
-st.title("🚇 지하철역 주변 상권 개폐업 분석 (2020~2025)")
+st.set_page_config(page_title="서울 상권 분석 (공식 명세 반영)", layout="wide")
+st.title("🚇 지하철역 주변 상권 분석 (2020~2025)")
 
 def fetch_data(dong_code):
     all_rows = []
-    # 데이터셋 명칭: V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S
-    # 엑셀에서 보신 데이터와 동일한 소스입니다.
     
-    # 서버 부하를 방지하고 성공률을 높이기 위해 최근 데이터부터 호출
-    for year in range(2020, 2026):
-        for quarter in range(1, 5):
-            # API URL (행정동 코드를 마지막에 넣는 방식)
-            url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S/1/1000/{year}/{quarter}/{dong_code}"
+    # 명세서의 STDR_YYQU_CD 형식(YYYYQ)에 맞춰 루프 생성
+    years = [str(y) for y in range(2020, 2026)]
+    quarters = ["1", "2", "3", "4"]
+    
+    progress_bar = st.progress(0)
+    total = len(years) * len(quarters)
+    count = 0
+
+    for y in years:
+        for q in quarters:
+            target_period = y + q # 예: "20241"
+            
+            # 명세서 구조: 인증키/타입/서비스명/시작/종료/기준_년분기_코드
+            # 행정동 코드는 필터링 인자가 없으므로 전체를 가져와서 코드 내에서 필터링해야 합니다.
+            url = f"http://openapi.seoul.go.kr:8088/{API_KEY}/json/{SERVICE_NAME}/1/1000/{target_period}"
             
             try:
                 res = requests.get(url)
-                data = res.json()
-                
-                if 'V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S' in data:
-                    rows = data['V_TRDAR_STRE_METRA_ADSTR_STATS_QU_S']['row']
-                    # '전체 업종' 합산 데이터를 만들기 위해 데이터 저장
-                    all_rows.extend(rows)
+                if res.status_code == 200:
+                    data = res.json()
+                    if SERVICE_NAME in data:
+                        rows = data[SERVICE_NAME]['row']
+                        # 선택한 행정동 코드(ADSTRD_CD)와 일치하는 데이터만 필터링
+                        filtered = [r for r in rows if r.get('ADSTRD_CD') == dong_code]
+                        all_rows.extend(filtered)
             except:
-                continue
+                pass
+            
+            count += 1
+            progress_bar.progress(count / total)
                 
     return pd.DataFrame(all_rows)
 
 selected_station = st.selectbox("분석할 지하철역을 선택하세요", list(STATIONS.keys()))
 
 if st.button("데이터 분석 시작"):
-    with st.spinner(f'{selected_station} 데이터를 불러오는 중...'):
+    with st.spinner('명세서 데이터 로드 중...'):
         df = fetch_data(STATIONS[selected_station])
         
         if not df.empty:
-            # 엑셀 컬럼명과 매칭하여 정리
-            # OPN_STOR_CO = 개업 점포 수 / CLS_STOR_CO = 폐업 점포 수
-            df['OPN_STOR_CO'] = pd.to_numeric(df['OPN_STOR_CO'])
-            df['CLS_STOR_CO'] = pd.to_numeric(df['CLS_STOR_CO'])
+            # 명세서 출력값 매핑: OPBIZ_STOR_CO(개업), CLSBIZ_STOR_CO(폐업)
+            df['OPBIZ_STOR_CO'] = pd.to_numeric(df['OPBIZ_STOR_CO'])
+            df['CLSBIZ_STOR_CO'] = pd.to_numeric(df['CLSBIZ_STOR_CO'])
             
-            # 연도/분기별로 모든 업종의 개폐업 수를 합산합니다.
-            summary = df.groupby(['STDR_YY_CD', 'STDR_QU_CD']).agg({
-                'OPN_STOR_CO': 'sum',
-                'CLS_STOR_CO': 'sum'
+            # 분기별 합산 (여러 업종 데이터를 하나로 합침)
+            summary = df.groupby('STDR_YYQU_CD').agg({
+                'OPBIZ_STOR_CO': 'sum',
+                'CLSBIZ_STOR_CO': 'sum'
             }).reset_index()
             
-            summary.columns = ['연도', '분기', '총_개업수', '총_폐업수']
-            summary = summary.sort_values(['연도', '분기'])
+            # 시각화용 이름 변경
+            summary.columns = ['년분기', '개업수', '폐업수']
+            summary = summary.sort_values('년분기')
 
-            st.success(f"✅ {selected_station} 데이터 로드 완료!")
+            st.success(f"✅ {selected_station} 분석 완료!")
             
-            # 시각화
-            st.subheader(f"📊 {selected_station} 상권 개폐업 추이")
-            st.line_chart(summary.set_index(['연도', '분기']))
+            # 메트릭
+            c1, c2 = st.columns(2)
+            c1.metric("총 개업 수", f"{int(summary['개업수'].sum()):,}개")
+            c2.metric("총 폐업 수", f"{int(summary['폐업수'].sum()):,}개")
             
-            st.subheader("상세 데이터 (분기별 합계)")
+            # 그래프 및 표
+            st.line_chart(summary.set_index('년분기'))
             st.dataframe(summary, use_container_width=True)
         else:
-            st.error("데이터를 불러오지 못했습니다. API 키가 해당 데이터셋(상권분석-행정동)에 접근 권한이 있는지 확인이 필요할 수 있습니다.")
+            st.error("데이터가 없습니다. (TIP: 새로 받은 키가 시스템에 등록되는 데 시간이 걸릴 수 있습니다.)")
