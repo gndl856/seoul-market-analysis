@@ -98,8 +98,7 @@ with tab1:
                             for c in ['개업률(%)', '폐업률(%)']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).map('{:.1f}'.format)
                             
                             # 좌측 정렬 적용
-                            # 탭 1, 탭 2 공통: 기존 st.table 코드를 아래처럼 변경
-st.write(df_disp) # 또는 st.dataframe(df_disp, use_container_width=True)
+                            st.table(left_align_df(df_disp))
 
 # --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
