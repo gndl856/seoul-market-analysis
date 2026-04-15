@@ -7,7 +7,7 @@ st.set_page_config(page_title="서울 상권 및 유동인구 리포트", layout
 
 st.title("📋 서울 상권 및 지하철 유동인구 리포트")
 
-# 1. 데이터 로드 함수 (컬럼명 자동 보정 포함)
+# 1. 데이터 로드 및 강제 정제 함수
 @st.cache_data
 def load_all_data():
     # --- 상권 데이터 로드 ---
@@ -20,20 +20,22 @@ def load_all_data():
             except: biz_list.append(pd.read_csv(f, encoding='utf-8-sig'))
         df_biz = pd.concat(biz_list, ignore_index=True)
     
-    # --- 지하철 데이터 로드 ---
+    # --- 지하철 데이터 로드 (강력한 정제 로직 추가) ---
     subway_files = glob.glob('data/CARD_SUBWAY_MONTH_*.csv') + glob.glob('CARD_SUBWAY_MONTH_*.csv')
     df_subway = None
     if subway_files:
         sub_list = []
         for f in subway_files:
             try:
-                # 따옴표가 섞인 CSV를 대비해 quotechar 설정
-                _df = pd.read_csv(f, encoding='utf-8-sig', quotechar='"')
+                # index_col=False를 설정하여 마지막 쉼표로 인한 오류 방지
+                _df = pd.read_csv(f, encoding='utf-8-sig', quotechar='"', index_col=False)
             except:
-                _df = pd.read_csv(f, encoding='cp949', quotechar='"')
+                _df = pd.read_csv(f, encoding='cp949', quotechar='"', index_col=False)
             
-            # 컬럼명에 공백이나 따옴표가 섞여 들어오는 경우 강제 정리
+            # 컬럼명에서 따옴표와 공백 제거
             _df.columns = [_col.replace('"', '').strip() for _col in _df.columns]
+            # "Unnamed"로 시작하는 불필요한 빈 컬럼 제거
+            _df = _df.loc[:, ~_df.columns.str.contains('^Unnamed')]
             sub_list.append(_df)
         df_subway = pd.concat(sub_list, ignore_index=True)
     
@@ -61,26 +63,26 @@ target_subway = STATION_MAP[selected_label]["subway"]
 
 tab1, tab2 = st.tabs(["🏬 업종별 개폐업 현황", "🚉 역별 유동인구 추이"])
 
-# --- TAB 1: 상권 개폐업 (생략 - 기존 유지) ---
+# --- TAB 1: 기존 상권 데이터 (생략 - 내부 로직 유지) ---
 with tab1:
-    st.info(f"{selected_label}의 업종별 데이터가 위 탭에서 정상 작동 중입니다.")
+    st.info("상권 분석 탭이 정상 작동 중입니다.")
 
-# --- TAB 2: 지하철 유동인구 추이 (정밀 보정) ---
+# --- TAB 2: 지하철 유동인구 (데이터 클리닝 강화) ---
 with tab2:
     if df_subway_raw is not None:
-        # 역명 필터링 (따옴표 제거 후 검색)
+        # 역명 및 사용일자에서 따옴표 제거 및 정규화
         df_subway_raw['역명'] = df_subway_raw['역명'].astype(str).str.replace('"', '').str.strip()
         sub_df = df_subway_raw[df_subway_raw['역명'].str.contains(target_subway, na=False)].copy()
         
         if not sub_df.empty:
-            # 사용일자 처리 (숫자형인 경우 대비)
+            # 날짜 및 숫자 변환 (따옴표 제거 후 변환)
             sub_df['사용일자'] = sub_df['사용일자'].astype(str).str.replace('"', '').str.strip()
             sub_df['사용일자'] = pd.to_datetime(sub_df['사용일자'], format='%Y%m%d', errors='coerce')
             sub_df = sub_df.dropna(subset=['사용일자'])
             
-            # 승하차수 정수 변환 (따옴표나 소수점 방지)
             for col in ['승차총승객수', '하차총승객수']:
-                sub_df[col] = pd.to_numeric(sub_df[col].astype(str).str.replace('"', '').str.strip(), errors='coerce').fillna(0)
+                if col in sub_df.columns:
+                    sub_df[col] = pd.to_numeric(sub_df[col].astype(str).str.replace('"', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
             
             sub_df['총승하차'] = sub_df['승차총승객수'] + sub_df['하차총승객수']
             sub_df['요일'] = sub_df['사용일자'].dt.weekday
@@ -95,18 +97,19 @@ with tab2:
             
             sub_df['기간분류'] = sub_df['요일'].apply(categorize_day)
             
-            # 집계
+            # 집계 및 피벗
             weekly_summary = sub_df.groupby(['주차', '사용일자', '기간분류'])['총승하차'].sum().reset_index()
             final_sub = weekly_summary.groupby(['주차', '기간분류'])['총승하차'].mean().round(0).astype(int).unstack()
             
-            # 출력 처리
-            target_cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final_sub.columns]
-            final_sub = final_sub[target_cols]
+            # 컬럼 순서 고정 및 정렬
+            cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final_sub.columns]
+            final_sub = final_sub[cols]
             final_sub.index = sorted(final_sub.index, key=lambda x: int(x.replace('주차', '')) if '주차' in x else 0)
             
             st.subheader(f"🚉 {target_subway}역 주차별 유동인구 (1일 평균 승하차)")
             st.table(final_sub.applymap(lambda x: "{:,}".format(x)))
+            st.caption("※ 데이터 내 따옴표 및 빈 컬럼을 자동으로 정제하여 표시합니다.")
         else:
-            st.warning(f"데이터 파일 내에 '{target_subway}'역 명칭이 정확히 일치하지 않습니다.")
+            st.warning(f"데이터 파일 내에 '{target_subway}'역 명칭을 찾을 수 없습니다. (현재 파일 내 역명 예시: {df_subway_raw['역명'].iloc[0]})")
     else:
-        st.error("지하철 CSV 파일을 불러오지 못했습니다. 파일명을 확인해주세요.")
+        st.error("지하철 CSV 파일을 불러오지 못했습니다. 파일 위치나 파일명을 확인해주세요.")
