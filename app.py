@@ -54,6 +54,13 @@ target_info = STATION_MAP[selected_label]
 target_dong = target_info["dong"]
 target_subways = target_info["subway_names"]
 
+# [공통 정렬 함수] 인덱스와 모든 셀을 좌측 정렬로 강제
+def left_align_df(df):
+    return df.style.set_table_styles([
+        {'selector': 'th', 'props': [('text-align', 'left')]},
+        {'selector': 'td', 'props': [('text-align', 'left')]}
+    ]).set_properties(**{'text-align': 'left'})
+
 tab1, tab2 = st.tabs(["🏬 업종별 개폐업 현황", "🚉 역별 유동인구 추이"])
 
 # --- TAB 1: 상권 개폐업 현황 ---
@@ -90,10 +97,8 @@ with tab1:
                             for c in ['총 점포', '개업수', '폐업수']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).astype(int)
                             for c in ['개업률(%)', '폐업률(%)']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).map('{:.1f}'.format)
                             
-                            # [좌측 정렬 적용]
-                            st.table(df_disp.style.set_properties(**{'text-align': 'left'}))
-        else: st.warning("상권 데이터가 없습니다.")
-    else: st.error("상권 데이터 로드 실패")
+                            # 좌측 정렬 적용
+                            st.table(left_align_df(df_disp))
 
 # --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
@@ -128,9 +133,9 @@ with tab2:
             
             st.subheader(f"🚉 {selected_label} 유동인구 ({', '.join(target_subways)} 합산)")
             
-            # [좌측 정렬 및 포맷팅 적용]
+            # 숫자 포맷팅 후 좌측 정렬 적용
             formatted_final = final.map(lambda x: "{:,}".format(int(x)))
-            st.table(formatted_final.style.set_properties(**{'text-align': 'left'}))
+            st.table(left_align_df(formatted_final))
             
             st.caption(f"※ {', '.join(target_subways)} 명칭의 데이터를 합산하여 집계했습니다.")
         else: st.warning(f"'{selected_label}'의 지하철 데이터를 찾을 수 없습니다.")
