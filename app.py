@@ -37,7 +37,7 @@ def load_all_data():
 
 df_biz_raw, df_subway_raw = load_all_data()
 
-# 2. 분석 지역 설정 (잠실역 명칭 정밀화)
+# 2. 분석 지역 설정 (서울대입구 명칭 정밀화)
 STATION_MAP = {
     "강남역": {"dong": "역삼1", "subway_names": ["강남"]},
     "홍대입구역": {"dong": "서교", "subway_names": ["홍대입구"]},
@@ -46,9 +46,9 @@ STATION_MAP = {
     "신촌역": {"dong": "신촌", "subway_names": ["신촌"]},
     "합정역": {"dong": "서교", "subway_names": ["합정"]},
     "신림역": {"dong": "신림", "subway_names": ["신림"]},
-    "서울대입구역": {"dong": "청룡", "subway_names": ["서울대입구"]},
+    "서울대입구역": {"dong": "청룡", "subway_names": ["서울대입구(관악구청)", "서울대입구"]}, # 관악구청 포함 명칭 추가
     "건대입구역": {"dong": "화양", "subway_names": ["건대입구"]},
-    "잠실역": {"dong": "잠실6", "subway_names": ["잠실", "잠실(송파구청)"]} # 2호선 잠실, 8호선 잠실(송파구청) 합산
+    "잠실역": {"dong": "잠실6", "subway_names": ["잠실", "잠실(송파구청)"]}
 }
 
 selected_label = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
@@ -98,10 +98,9 @@ with tab1:
 # --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
     if not df_subway_raw.empty:
-        # 역명 클리닝
         df_subway_raw['역명'] = df_subway_raw['역명'].astype(str).str.replace('"', '').str.strip()
         
-        # [핵심수정] target_subways 리스트에 있는 정확한 명칭과 일치하는 데이터만 추출
+        # [핵심수정] 서울대입구(관악구청) 명칭까지 포함하여 검색
         sub_df = df_subway_raw[df_subway_raw['역명'].isin(target_subways)].copy()
         
         if not sub_df.empty:
@@ -110,7 +109,6 @@ with tab2:
             for col in ['승차총승객수', '하차총승객수']:
                 sub_df[col] = pd.to_numeric(sub_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             
-            # 여러 노선명(잠실, 잠실(송파구청))이 섞여 있으므로 날짜별로 먼저 합산
             daily = sub_df.groupby('사용일자')[['승차총승객수', '하차총승객수']].sum().reset_index()
             daily['총승하차'] = daily['승차총승객수'] + daily['하차총승객수']
             daily['요일'] = daily['사용일자'].dt.weekday
@@ -132,6 +130,6 @@ with tab2:
             
             st.subheader(f"🚉 {selected_label} 유동인구 ({', '.join(target_subways)} 합산)")
             st.table(final.map(lambda x: "{:,}".format(int(x))))
-            st.caption(f"※ {', '.join(target_subways)} 명칭의 데이터를 합산하여 일평균 인원을 집계했습니다.")
-        else: st.warning("해당 역의 데이터를 찾을 수 없습니다.")
+            st.caption(f"※ {', '.join(target_subways)} 명칭의 데이터를 합산하여 집계했습니다.")
+        else: st.warning(f"'{selected_label}'의 지하철 데이터를 찾을 수 없습니다. (검색어: {target_subways})")
     else: st.error("지하철 데이터 로드 실패")
