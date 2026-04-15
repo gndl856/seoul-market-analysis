@@ -59,7 +59,7 @@ target_subway = STATION_MAP[selected_label]["subway"]
 
 tab1, tab2 = st.tabs(["🏬 업종별 개폐업 현황", "🚉 역별 유동인구 추이"])
 
-# --- TAB 1: 상권 개폐업 (기존 유지) ---
+# --- TAB 1: 상권 개폐업 현황 ---
 with tab1:
     if not df_biz_raw.empty:
         df_biz_raw['행정동_코드_명'] = df_biz_raw['행정동_코드_명'].astype(str).str.replace(" ", "")
@@ -76,24 +76,29 @@ with tab1:
             latest_q = summary_grouped['기준_년분기_코드'].max()
             st.subheader(f"📍 {selected_label} 상권 상세 ({latest_q} 기준)")
             latest_summary = summary_grouped[summary_grouped['기준_년분기_코드'] == latest_q]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("현재 전체 점포", f"{int(latest_summary['점포_수'].sum()):,}개")
-            m2.metric("평균 개업률", f"{latest_summary['개업_율'].mean():.1f}%")
-            m3.metric("평균 폐업률", f"{latest_summary['폐업_률'].mean():.1f}%")
+            
+            if not latest_summary.empty:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("현재 전체 점포", f"{int(latest_summary['점포_수'].sum()):,}개")
+                m2.metric("평균 개업률", f"{latest_summary['개업_율'].mean():.1f}%")
+                m3.metric("평균 폐업률", f"{latest_summary['폐업_률'].mean():.1f}%")
 
-            st.divider()
-            sub_tabs = st.tabs(FOOD_SERVICES)
-            for i, service in enumerate(FOOD_SERVICES):
-                with sub_tabs[i]:
-                    service_df = summary_grouped[summary_grouped['서비스_업종_코드_명'] == service].sort_values('기준_년분기_코드', ascending=False)
-                    if not service_df.empty:
-                        df_disp = service_df[['기준_년분기_코드', '점포_수', '개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']].copy()
-                        df_disp.columns = ['년분기', '총 점포', '개업수', '폐업수', '개업률(%)', '폐업률(%)']
-                        for col in ['총 점포', '개업수', '폐업수']: df_disp[col] = df_disp[col].astype(float).astype(int)
-                        for col in ['개업률(%)', '폐업률(%)']: df_disp[col] = df_disp[col].astype(float).map('{:.1f}'.format)
-                        st.table(df_disp)
+                st.divider()
+                sub_tabs = st.tabs(FOOD_SERVICES)
+                for i, service in enumerate(FOOD_SERVICES):
+                    with sub_tabs[i]:
+                        service_df = summary_grouped[summary_grouped['서비스_업종_코드_명'] == service].sort_values('기준_년분기_코드', ascending=False)
+                        if not service_df.empty:
+                            df_disp = service_df[['기준_년분기_코드', '점포_수', '개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']].copy()
+                            df_disp.columns = ['년분기', '총 점포', '개업수', '폐업수', '개업률(%)', '폐업률(%)']
+                            # 에러 방지를 위해 에러 처리 강화
+                            for col in ['총 점포', '개업수', '폐업수']: 
+                                df_disp[col] = pd.to_numeric(df_disp[col], errors='coerce').fillna(0).astype(int)
+                            for col in ['개업률(%)', '폐업률(%)']: 
+                                df_disp[col] = pd.to_numeric(df_disp[col], errors='coerce').fillna(0).map('{:.1f}'.format)
+                            st.table(df_disp)
 
-# --- TAB 2: 지하철 유동인구 (수정 반영) ---
+# --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
     if not df_subway_raw.empty:
         if '역명' in df_subway_raw.columns:
@@ -108,7 +113,6 @@ with tab2:
                 sub_df['총승하차'] = sub_df['승차총승객수'] + sub_df['하차총승객수']
                 sub_df['요일'] = sub_df['사용일자'].dt.weekday
                 
-                # [수정 1] 주차 표기 로직: 해당 일자가 속한 주의 월요일 날짜 계산
                 def get_monday_label(dt):
                     monday = dt - timedelta(days=dt.weekday())
                     return monday.strftime('%y년%m월%d일(주)')
@@ -121,20 +125,17 @@ with tab2:
                     else: return "일요일"
                 sub_df['기간분류'] = sub_df['요일'].apply(cat_day)
                 
-                # 집계
                 final = sub_df.groupby(['기간(월요일기준)', '사용일자', '기간분류'])['총승하차'].sum().reset_index()
-                # [수정 2] 정수화를 위해 round(0).astype(int) 적용
-                final = final.groupby(['기간(월요일기준)', '기간분류'])['총승하차'].mean().round(0).astype(int).unstack()
+                # 데이터가 없는 셀은 0으로 채우고 정수 변환
+                final = final.groupby(['기간(월요일기준)', '기간분류'])['총승하차'].mean().round(0).unstack().fillna(0).astype(int)
                 
-                # 열 순서 고정
                 target_cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final.columns]
                 final = final[target_cols]
-                # 인덱스(날짜문자열) 순서대로 정렬
                 final = final.sort_index()
                 
                 st.subheader(f"🚉 {target_subway}역 주차별 유동인구 (1일 평균 승하차)")
-                # 표에 콤마 추가 및 정수 출력
-                st.table(final.map(lambda x: "{:,}".format(int(x))))
+                # 데이터가 None일 경우를 대비해 안전하게 포맷팅
+                st.table(final.map(lambda x: "{:,}".format(int(x)) if pd.notnull(x) else "0"))
                 st.caption("※ 기간은 해당 주차의 시작일(월요일) 기준입니다.")
         else: st.error("지하철 데이터 컬럼 인식 실패")
     else: st.error("지하철 데이터 로드 실패")
