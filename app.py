@@ -7,37 +7,42 @@ st.set_page_config(page_title="서울 상권 및 유동인구 리포트", layout
 
 st.title("📋 서울 상권 및 지하철 유동인구 리포트")
 
-# 1. 데이터 로드 및 강제 정제 함수
+# 1. 데이터 로드 및 정제 함수
 @st.cache_data
 def load_all_data():
     # --- 상권 데이터 로드 ---
     biz_files = glob.glob('data/서울시*.csv') + glob.glob('서울시*.csv')
-    df_biz = None
+    df_biz = pd.DataFrame()
     if biz_files:
         biz_list = []
         for f in biz_files:
-            try: biz_list.append(pd.read_csv(f, encoding='cp949'))
-            except: biz_list.append(pd.read_csv(f, encoding='utf-8-sig'))
-        df_biz = pd.concat(biz_list, ignore_index=True)
+            try:
+                temp_df = pd.read_csv(f, encoding='cp949')
+                biz_list.append(temp_df)
+            except:
+                temp_df = pd.read_csv(f, encoding='utf-8-sig')
+                biz_list.append(temp_df)
+        if biz_list:
+            df_biz = pd.concat(biz_list, ignore_index=True)
     
-    # --- 지하철 데이터 로드 (강력한 정제 로직 추가) ---
+    # --- 지하철 데이터 로드 ---
     subway_files = glob.glob('data/CARD_SUBWAY_MONTH_*.csv') + glob.glob('CARD_SUBWAY_MONTH_*.csv')
-    df_subway = None
+    df_subway = pd.DataFrame()
     if subway_files:
         sub_list = []
         for f in subway_files:
             try:
-                # index_col=False를 설정하여 마지막 쉼표로 인한 오류 방지
+                # index_col=False로 밀림 방지, quotechar로 따옴표 제거
                 _df = pd.read_csv(f, encoding='utf-8-sig', quotechar='"', index_col=False)
             except:
                 _df = pd.read_csv(f, encoding='cp949', quotechar='"', index_col=False)
             
-            # 컬럼명에서 따옴표와 공백 제거
+            # 컬럼명 청소 (따옴표, 공백 제거)
             _df.columns = [_col.replace('"', '').strip() for _col in _df.columns]
-            # "Unnamed"로 시작하는 불필요한 빈 컬럼 제거
             _df = _df.loc[:, ~_df.columns.str.contains('^Unnamed')]
             sub_list.append(_df)
-        df_subway = pd.concat(sub_list, ignore_index=True)
+        if sub_list:
+            df_subway = pd.concat(sub_list, ignore_index=True)
     
     return df_biz, df_subway
 
@@ -63,53 +68,86 @@ target_subway = STATION_MAP[selected_label]["subway"]
 
 tab1, tab2 = st.tabs(["🏬 업종별 개폐업 현황", "🚉 역별 유동인구 추이"])
 
-# --- TAB 1: 기존 상권 데이터 (생략 - 내부 로직 유지) ---
+# --- TAB 1: 상권 개폐업 현황 ---
 with tab1:
-    st.info("상권 분석 탭이 정상 작동 중입니다.")
+    if not df_biz_raw.empty:
+        # 데이터 정제
+        df_biz_raw['행정동_코드_명'] = df_biz_raw['행정동_코드_명'].astype(str).str.replace(" ", "")
+        filtered_biz = df_biz_raw[df_biz_raw['행정동_코드_명'].str.contains(target_dong, na=False)].copy()
+        
+        if not filtered_biz.empty:
+            cols = ['개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률', '점포_수']
+            for col in cols:
+                filtered_biz[col] = pd.to_numeric(filtered_biz[col], errors='coerce').fillna(0)
+            
+            filtered_biz['기준_년분기_코드'] = filtered_biz['기준_년분기_코드'].astype(str)
+            FOOD_SERVICES = ["한식음식점", "중식음식점", "일식음식점", "양식음식점", "제과점", "패스트푸드점", "치킨전문점", "분식전문점", "호프-간이주점", "커피-음료"]
+            
+            summary_grouped = filtered_biz[filtered_biz['서비스_업종_코드_명'].isin(FOOD_SERVICES)].groupby(['기준_년분기_코드', '서비스_업종_코드_명']).agg({
+                '점포_수': 'sum', '개업_점포_수': 'sum', '폐업_점포_수': 'sum', '개업_율': 'mean', '폐업_률': 'mean'
+            }).reset_index()
 
-# --- TAB 2: 지하철 유동인구 (데이터 클리닝 강화) ---
+            latest_q = summary_grouped['기준_년분기_코드'].max()
+            st.subheader(f"📍 {selected_label} 상권 상세 ({latest_q} 기준)")
+            
+            latest_summary = summary_grouped[summary_grouped['기준_년분기_코드'] == latest_q]
+            m1, m2, m3 = st.columns(3)
+            m1.metric("현재 전체 점포", f"{int(latest_summary['점포_수'].sum()):,}개")
+            m2.metric("평균 개업률", f"{latest_summary['개업_율'].mean():.1f}%")
+            m3.metric("평균 폐업률", f"{latest_summary['폐업_률'].mean():.1f}%")
+
+            st.divider()
+            sub_tabs = st.tabs(FOOD_SERVICES)
+            for i, service in enumerate(FOOD_SERVICES):
+                with sub_tabs[i]:
+                    service_df = summary_grouped[summary_grouped['서비스_업종_코드_명'] == service].sort_values('기준_년분기_코드', ascending=False)
+                    if not service_df.empty:
+                        df_disp = service_df[['기준_년분기_코드', '점포_수', '개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']].copy()
+                        df_disp.columns = ['년분기', '총 점포', '개업수', '폐업수', '개업률(%)', '폐업률(%)']
+                        for col in ['총 점포', '개업수', '폐업수']: df_disp[col] = df_disp[col].astype(int)
+                        for col in ['개업률(%)', '폐업률(%)']: df_disp[col] = df_disp[col].map('{:.1f}'.format)
+                        st.table(df_disp)
+                    else: st.info("데이터 없음")
+        else: st.warning("해당 동네 데이터를 찾을 수 없습니다.")
+    else: st.error("상권 CSV 파일 로드 실패")
+
+# --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
-    if df_subway_raw is not None:
-        # 역명 및 사용일자에서 따옴표 제거 및 정규화
-        df_subway_raw['역명'] = df_subway_raw['역명'].astype(str).str.replace('"', '').str.strip()
-        sub_df = df_subway_raw[df_subway_raw['역명'].str.contains(target_subway, na=False)].copy()
+    if not df_subway_raw.empty:
+        # 모든 값 문자열 변환 후 따옴표 제거 및 정제
+        df_sub = df_subway_raw.copy()
+        for col in df_sub.columns:
+            df_sub[col] = df_sub[col].astype(str).str.replace('"', '').str.strip()
+            
+        sub_df = df_sub[df_sub['역명'].str.contains(target_subway, na=False)].copy()
         
         if not sub_df.empty:
-            # 날짜 및 숫자 변환 (따옴표 제거 후 변환)
-            sub_df['사용일자'] = sub_df['사용일자'].astype(str).str.replace('"', '').str.strip()
             sub_df['사용일자'] = pd.to_datetime(sub_df['사용일자'], format='%Y%m%d', errors='coerce')
             sub_df = sub_df.dropna(subset=['사용일자'])
             
+            # 숫자 데이터 정제
             for col in ['승차총승객수', '하차총승객수']:
-                if col in sub_df.columns:
-                    sub_df[col] = pd.to_numeric(sub_df[col].astype(str).str.replace('"', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
+                sub_df[col] = pd.to_numeric(sub_df[col].str.replace(',', ''), errors='coerce').fillna(0)
             
             sub_df['총승하차'] = sub_df['승차총승객수'] + sub_df['하차총승객수']
             sub_df['요일'] = sub_df['사용일자'].dt.weekday
-            
-            # 주차 계산 (2026-01-05 월요일 기준)
             sub_df['주차'] = sub_df['사용일자'].apply(lambda x: f"{(x - pd.Timestamp('2026-01-05')).days // 7 + 1}주차")
             
-            def categorize_day(day):
-                if day <= 3: return "월~목(평균)"
-                elif day <= 5: return "금~토(평균)"
+            def cat_day(d):
+                if d <= 3: return "월~목(평균)"
+                elif d <= 5: return "금~토(평균)"
                 else: return "일요일"
+            sub_df['기간분류'] = sub_df['요일'].apply(cat_day)
             
-            sub_df['기간분류'] = sub_df['요일'].apply(categorize_day)
+            final = sub_df.groupby(['주차', '사용일자', '기간분류'])['총승하차'].sum().reset_index()
+            final = final.groupby(['주차', '기간분류'])['총승하차'].mean().round(0).astype(int).unstack()
             
-            # 집계 및 피벗
-            weekly_summary = sub_df.groupby(['주차', '사용일자', '기간분류'])['총승하차'].sum().reset_index()
-            final_sub = weekly_summary.groupby(['주차', '기간분류'])['총승하차'].mean().round(0).astype(int).unstack()
+            # 컬럼 정렬 및 보정
+            target_cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final.columns]
+            final = final[target_cols]
+            final.index = sorted(final.index, key=lambda x: int(x.replace('주차', '')) if '주차' in x else 0)
             
-            # 컬럼 순서 고정 및 정렬
-            cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final_sub.columns]
-            final_sub = final_sub[cols]
-            final_sub.index = sorted(final_sub.index, key=lambda x: int(x.replace('주차', '')) if '주차' in x else 0)
-            
-            st.subheader(f"🚉 {target_subway}역 주차별 유동인구 (1일 평균 승하차)")
-            st.table(final_sub.applymap(lambda x: "{:,}".format(x)))
-            st.caption("※ 데이터 내 따옴표 및 빈 컬럼을 자동으로 정제하여 표시합니다.")
-        else:
-            st.warning(f"데이터 파일 내에 '{target_subway}'역 명칭을 찾을 수 없습니다. (현재 파일 내 역명 예시: {df_subway_raw['역명'].iloc[0]})")
-    else:
-        st.error("지하철 CSV 파일을 불러오지 못했습니다. 파일 위치나 파일명을 확인해주세요.")
+            st.subheader(f"🚉 {target_subway}역 주차별 유동인구")
+            st.table(final.applymap(lambda x: "{:,}".format(x)))
+        else: st.warning("역명을 찾을 수 없습니다.")
+    else: st.error("지하철 데이터 로드 실패")
