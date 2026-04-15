@@ -26,18 +26,16 @@ def load_all_data():
         for f in subway_files:
             try: _df = pd.read_csv(f, encoding='utf-8-sig', index_col=False)
             except: _df = pd.read_csv(f, encoding='cp949', index_col=False)
-            
             _df.columns = [_col.replace('"', '').strip() for _col in _df.columns]
             _df = _df.astype(str).apply(lambda x: x.str.replace('"', '').str.strip())
             _df = _df.loc[:, ~_df.columns.str.contains('^Unnamed')]
             sub_list.append(_df)
         if sub_list: df_subway = pd.concat(sub_list, ignore_index=True)
-    
     return df_biz, df_subway
 
 df_biz_raw, df_subway_raw = load_all_data()
 
-# 2. 분석 지역 설정 (서울대입구 명칭 정밀화)
+# 2. 분석 지역 설정
 STATION_MAP = {
     "강남역": {"dong": "역삼1", "subway_names": ["강남"]},
     "홍대입구역": {"dong": "서교", "subway_names": ["홍대입구"]},
@@ -46,7 +44,7 @@ STATION_MAP = {
     "신촌역": {"dong": "신촌", "subway_names": ["신촌"]},
     "합정역": {"dong": "서교", "subway_names": ["합정"]},
     "신림역": {"dong": "신림", "subway_names": ["신림"]},
-    "서울대입구역": {"dong": "청룡", "subway_names": ["서울대입구(관악구청)", "서울대입구"]}, # 관악구청 포함 명칭 추가
+    "서울대입구역": {"dong": "청룡", "subway_names": ["서울대입구(관악구청)", "서울대입구"]},
     "건대입구역": {"dong": "화양", "subway_names": ["건대입구"]},
     "잠실역": {"dong": "잠실6", "subway_names": ["잠실", "잠실(송파구청)"]}
 }
@@ -91,7 +89,9 @@ with tab1:
                             df_disp.columns = ['년분기', '총 점포', '개업수', '폐업수', '개업률(%)', '폐업률(%)']
                             for c in ['총 점포', '개업수', '폐업수']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).astype(int)
                             for c in ['개업률(%)', '폐업률(%)']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).map('{:.1f}'.format)
-                            st.table(df_disp)
+                            
+                            # [좌측 정렬 적용]
+                            st.table(df_disp.style.set_properties(**{'text-align': 'left'}))
         else: st.warning("상권 데이터가 없습니다.")
     else: st.error("상권 데이터 로드 실패")
 
@@ -99,8 +99,6 @@ with tab1:
 with tab2:
     if not df_subway_raw.empty:
         df_subway_raw['역명'] = df_subway_raw['역명'].astype(str).str.replace('"', '').str.strip()
-        
-        # [핵심수정] 서울대입구(관악구청) 명칭까지 포함하여 검색
         sub_df = df_subway_raw[df_subway_raw['역명'].isin(target_subways)].copy()
         
         if not sub_df.empty:
@@ -129,7 +127,11 @@ with tab2:
             final = final[target_cols].sort_index()
             
             st.subheader(f"🚉 {selected_label} 유동인구 ({', '.join(target_subways)} 합산)")
-            st.table(final.map(lambda x: "{:,}".format(int(x))))
+            
+            # [좌측 정렬 및 포맷팅 적용]
+            formatted_final = final.map(lambda x: "{:,}".format(int(x)))
+            st.table(formatted_final.style.set_properties(**{'text-align': 'left'}))
+            
             st.caption(f"※ {', '.join(target_subways)} 명칭의 데이터를 합산하여 집계했습니다.")
-        else: st.warning(f"'{selected_label}'의 지하철 데이터를 찾을 수 없습니다. (검색어: {target_subways})")
+        else: st.warning(f"'{selected_label}'의 지하철 데이터를 찾을 수 없습니다.")
     else: st.error("지하철 데이터 로드 실패")
