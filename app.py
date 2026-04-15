@@ -7,7 +7,7 @@ st.set_page_config(page_title="서울 상권 및 유동인구 리포트", layout
 
 st.title("📋 서울 상권 및 지하철 유동인구 리포트")
 
-# 1. 데이터 로드 및 강제 클리닝 함수
+# 1. 데이터 로드 함수
 @st.cache_data
 def load_all_data():
     biz_files = glob.glob('data/서울시*.csv') + glob.glob('서울시*.csv')
@@ -37,28 +37,28 @@ def load_all_data():
 
 df_biz_raw, df_subway_raw = load_all_data()
 
-# 2. 분석 지역 설정 (노선 정보 추가)
+# 2. 분석 지역 설정 (잠실역 명칭 정밀화)
 STATION_MAP = {
-    "강남역": {"dong": "역삼1", "subway": "강남", "line": ["2호선"]},
-    "홍대입구역": {"dong": "서교", "subway": "홍대입구", "line": ["2호선", "경의선", "공항철도"]},
-    "종로3가역": {"dong": "종로1", "subway": "종로3가", "line": ["1호선", "3호선", "5호선"]},
-    "을지로3가역": {"dong": "을지로", "subway": "을지로3가", "line": ["2호선", "3호선"]},
-    "신촌역": {"dong": "신촌", "subway": "신촌", "line": ["2호선"]},
-    "합정역": {"dong": "서교", "subway": "합정", "line": ["2호선", "6호선"]},
-    "신림역": {"dong": "신림", "subway": "신림", "line": ["2호선", "신림선"]},
-    "서울대입구역": {"dong": "청룡", "subway": "서울대입구", "line": ["2호선"]},
-    "건대입구역": {"dong": "화양", "subway": "건대입구", "line": ["2호선", "7호선"]},
-    "잠실역": {"dong": "잠실6", "subway": "잠실", "line": ["2호선", "8호선"]} # 잠실나루 등 제외
+    "강남역": {"dong": "역삼1", "subway_names": ["강남"]},
+    "홍대입구역": {"dong": "서교", "subway_names": ["홍대입구"]},
+    "종로3가역": {"dong": "종로1", "subway_names": ["종로3가"]},
+    "을지로3가역": {"dong": "을지로", "subway_names": ["을지로3가"]},
+    "신촌역": {"dong": "신촌", "subway_names": ["신촌"]},
+    "합정역": {"dong": "서교", "subway_names": ["합정"]},
+    "신림역": {"dong": "신림", "subway_names": ["신림"]},
+    "서울대입구역": {"dong": "청룡", "subway_names": ["서울대입구"]},
+    "건대입구역": {"dong": "화양", "subway_names": ["건대입구"]},
+    "잠실역": {"dong": "잠실6", "subway_names": ["잠실", "잠실(송파구청)"]} # 2호선 잠실, 8호선 잠실(송파구청) 합산
 }
 
 selected_label = st.sidebar.selectbox("📍 분석 지역 선택", list(STATION_MAP.keys()))
-target_dong = STATION_MAP[selected_label]["dong"]
-target_subway = STATION_MAP[selected_label]["subway"]
-target_lines = STATION_MAP[selected_label]["line"]
+target_info = STATION_MAP[selected_label]
+target_dong = target_info["dong"]
+target_subways = target_info["subway_names"]
 
 tab1, tab2 = st.tabs(["🏬 업종별 개폐업 현황", "🚉 역별 유동인구 추이"])
 
-# --- TAB 1: 상권 개폐업 현황 (기존 동일) ---
+# --- TAB 1: 상권 개폐업 현황 ---
 with tab1:
     if not df_biz_raw.empty:
         df_biz_raw['행정동_코드_명'] = df_biz_raw['행정동_코드_명'].astype(str).str.replace(" ", "")
@@ -81,7 +81,6 @@ with tab1:
                 m1.metric("현재 전체 점포", f"{int(latest_summary['점포_수'].sum()):,}개")
                 m2.metric("평균 개업률", f"{latest_summary['개업_율'].mean():.1f}%")
                 m3.metric("평균 폐업률", f"{latest_summary['폐업_률'].mean():.1f}%")
-
                 st.divider()
                 sub_tabs = st.tabs(FOOD_SERVICES)
                 for i, service in enumerate(FOOD_SERVICES):
@@ -90,50 +89,49 @@ with tab1:
                         if not service_df.empty:
                             df_disp = service_df[['기준_년분기_코드', '점포_수', '개업_점포_수', '폐업_점포_수', '개업_율', '폐업_률']].copy()
                             df_disp.columns = ['년분기', '총 점포', '개업수', '폐업수', '개업률(%)', '폐업률(%)']
-                            for col in ['총 점포', '개업수', '폐업수']: 
-                                df_disp[col] = pd.to_numeric(df_disp[col], errors='coerce').fillna(0).astype(int)
-                            for col in ['개업률(%)', '폐업률(%)']: 
-                                df_disp[col] = pd.to_numeric(df_disp[col], errors='coerce').fillna(0).map('{:.1f}'.format)
+                            for c in ['총 점포', '개업수', '폐업수']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).astype(int)
+                            for c in ['개업률(%)', '폐업률(%)']: df_disp[c] = pd.to_numeric(df_disp[c]).fillna(0).map('{:.1f}'.format)
                             st.table(df_disp)
+        else: st.warning("상권 데이터가 없습니다.")
+    else: st.error("상권 데이터 로드 실패")
 
-# --- TAB 2: 지하철 유동인구 (노선 필터링 강화) ---
+# --- TAB 2: 지하철 유동인구 추이 ---
 with tab2:
     if not df_subway_raw.empty:
         # 역명 클리닝
         df_subway_raw['역명'] = df_subway_raw['역명'].astype(str).str.replace('"', '').str.strip()
-        df_subway_raw['노선명'] = df_subway_raw['노선명'].astype(str).str.replace('"', '').str.strip()
         
-        # [수정] 역명과 노선명을 동시에 체크 (예: 잠실역이면서 2호선 혹은 8호선인 데이터만)
-        sub_df = df_subway_raw[
-            (df_subway_raw['역명'].str.contains(target_subway, na=False)) & 
-            (df_subway_raw['노선명'].isin(target_lines))
-        ].copy()
+        # [핵심수정] target_subways 리스트에 있는 정확한 명칭과 일치하는 데이터만 추출
+        sub_df = df_subway_raw[df_subway_raw['역명'].isin(target_subways)].copy()
         
         if not sub_df.empty:
             sub_df['사용일자'] = pd.to_datetime(sub_df['사용일자'], format='%Y%m%d', errors='coerce')
             sub_df = sub_df.dropna(subset=['사용일자'])
-            
             for col in ['승차총승객수', '하차총승객수']:
                 sub_df[col] = pd.to_numeric(sub_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             
-            # 같은 날짜에 여러 노선이 있으면 합산
-            daily_total = sub_df.groupby('사용일자')[['승차총승객수', '하차총승객수']].sum().reset_index()
-            daily_total['총승하차'] = daily_total['승차총승객수'] + daily_total['하차총승객수']
-            daily_total['요일'] = daily_total['사용일자'].dt.weekday
+            # 여러 노선명(잠실, 잠실(송파구청))이 섞여 있으므로 날짜별로 먼저 합산
+            daily = sub_df.groupby('사용일자')[['승차총승객수', '하차총승객수']].sum().reset_index()
+            daily['총승하차'] = daily['승차총승객수'] + daily['하차총승객수']
+            daily['요일'] = daily['사용일자'].dt.weekday
             
             def get_monday_label(dt):
                 monday = dt - timedelta(days=dt.weekday())
                 return monday.strftime('%y년%m월%d일(주)')
-            
-            daily_total['기간(월요일기준)'] = daily_total['사용일자'].apply(get_monday_label)
+            daily['기간(월요일기준)'] = daily['사용일자'].apply(get_monday_label)
             
             def cat_day(d):
                 if d <= 3: return "월~목(평균)"
                 elif d <= 5: return "금~토(평균)"
                 else: return "일요일"
-            daily_total['기간분류'] = daily_total['요일'].apply(cat_day)
+            daily['기간분류'] = daily['요일'].apply(cat_day)
             
-            # 집계
-            final = daily_total.groupby(['기간(월요일기준)', '기간분류'])['총승하차'].mean().round(0).unstack().fillna(0).astype(int)
+            final = daily.groupby(['기간(월요일기준)', '기간분류'])['총승하차'].mean().round(0).unstack().fillna(0).astype(int)
+            target_cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final.columns]
+            final = final[target_cols].sort_index()
             
-            target_cols = [c for c in ["월~목(평균)", "금~토(평균)", "일요일"] if c in final
+            st.subheader(f"🚉 {selected_label} 유동인구 ({', '.join(target_subways)} 합산)")
+            st.table(final.map(lambda x: "{:,}".format(int(x))))
+            st.caption(f"※ {', '.join(target_subways)} 명칭의 데이터를 합산하여 일평균 인원을 집계했습니다.")
+        else: st.warning("해당 역의 데이터를 찾을 수 없습니다.")
+    else: st.error("지하철 데이터 로드 실패")
